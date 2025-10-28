@@ -25,13 +25,16 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "quakedef.h"
-
+const float	anorms[NUMVERTEXNORMALS][3] = {
+#include "anorms.h"
+};
 static qmodel_t*	loadmodel;
 static char	loadname[32];	// for hunk tags
 
 static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer);
+static void Mod_LoadMD3Model (qmodel_t* mod, const char* buffer);
 static void Mod_LoadMD5MeshModel (qmodel_t *mod, const char *buffer);
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
 
@@ -53,7 +56,6 @@ static int		mod_numknown;
 
 texture_t	*r_notexture_mip; //johnfitz -- moved here from r_main.c
 texture_t	*r_notexture_mip2; //johnfitz -- used for non-lightmapped surfs with a missing texture
-
 /*
 ===============
 R_MD5_f -- called when r_md5 changes
@@ -3077,6 +3079,33 @@ static void Mod_CalcAliasBounds (aliashdr_t *a)
 							radius = dist;
 					}
 				break;
+			case PV_MD3:
+			{
+				const md3pose_t* poses = (const md3pose_t*)((byte*)a + a->vertexes);
+				for (i = 0; i < a->numposes; i++)
+				{
+					for (j = 0; j < a->numverts_vbo; j++)
+					{
+						const md3pose_t* current_pose = &poses[i * a->numverts_vbo + j];
+
+						for (k = 0; k < 3; k++)
+							v[k] = current_pose->xyz[k];
+
+						for (k = 0; k < 3; k++)
+						{
+							loadmodel->mins[k] = q_min (loadmodel->mins[k], v[k]);
+							loadmodel->maxs[k] = q_max (loadmodel->maxs[k], v[k]);
+						}
+						dist = v[0] * v[0] + v[1] * v[1];
+						if (yawradius < dist)
+							yawradius = dist;
+						dist += v[2] * v[2];
+						if (radius < dist)
+							radius = dist;
+					}
+				}
+			}
+			break;
 			case PV_IQM:
 				//process verts
 				for (i=0 ; i<a->numposes; i++)
@@ -3121,7 +3150,6 @@ static void Mod_CalcAliasBounds (aliashdr_t *a)
 	loadmodel->ymins[2] = loadmodel->mins[2];
 	loadmodel->ymaxs[2] = loadmodel->maxs[2];
 }
-
 static qboolean
 nameInList(const char *list, const char *name)
 {
@@ -3193,6 +3221,8 @@ Mod_LoadAliasModel
 static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer)
 {
 	char				path[MAX_QPATH];
+
+	unsigned int		md3_path_id;
 	unsigned int		md5_path_id;
 	int					i, j;
 	mdl_t				*pinmodel;
@@ -3228,6 +3258,19 @@ static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer)
 				Mod_LoadMD5MeshModel (mod, md5buffer);
 				free (md5buffer);
 				return;
+			}
+		}
+		COM_StripExtension (mod->name, path, sizeof (path));
+		COM_AddExtension (path, ".md3", sizeof (path));
+
+		if (COM_FileExists (path, &md3_path_id) && md3_path_id >= mod->path_id)
+		{
+			char* md3buffer = (char*)COM_LoadMallocFile (path, NULL);
+			if (md3buffer)
+			{
+				Mod_LoadMD3Model (mod, md3buffer);
+				free (md3buffer);
+				return; // Exit after loading the replacement
 			}
 		}
 	}
@@ -4329,5 +4372,289 @@ static void Mod_LoadMD5MeshModel (qmodel_t *mod, const char *buffer)
 		return;
 	memcpy (mod->cache.data, outhdr, total);
 
+	Hunk_FreeToLowMark (start);
+}
+
+// =======================================================================
+// == MD3 Model Loader Helpers ===========================================
+// =======================================================================
+
+// Helper to find the best pre-calculated normal index from the engine's table.
+static byte BestNormalIndex (vec3_t v)
+{
+	float	maxdot = -999999.0f;
+	int		best = 0;
+	int		i;
+
+	for (i = 0; i < 162; i++)
+	{
+		float dot = DotProduct (v, anorms[i]);
+		if (dot > maxdot)
+		{
+			maxdot = dot;
+			best = i;
+		}
+	}
+	return (byte)best;
+}
+
+// Helper to decode an MD3 normal (encoded as spherical coordinates) into a vec3_t.
+static void DecodeMD3Normal (unsigned char n[2], vec3_t out)
+{
+	float lat = (n[1] * 2 * M_PI) / 255.0f;
+	float lng = (n[0] * 2 * M_PI) / 255.0f;
+	out[0] = cosf (lng) * sinf (lat);
+	out[1] = sinf (lng) * sinf (lat);
+	out[2] = cosf (lat);
+}
+
+/*
+=================
+Mod_LoadMD3Model
+Loads a Quake 3 format .md3 model.
+Currently used only as an alternative to MD5.
+=================
+*/
+static void Mod_LoadMD3Model (qmodel_t* mod, const char* buffer)
+{
+	int i, j, f, surf_i;
+	md3Header_t* in_header;
+	md3Surface_t* in_surf;
+	aliashdr_t* mainhdr, * hdr;
+	int start, end, total;
+	char basepath[MAX_QPATH], md3path[MAX_QPATH], loadname[32];
+	int skinnum;
+
+	const char* fname = mod->name;
+	in_header = (md3Header_t*)buffer;
+
+	if (LittleLong (in_header->ident) != MD3_IDENT || LittleLong (in_header->version) != MD3_VERSION) { Sys_Error ("%s is not a valid MD3 file.", fname); return; }
+
+	start = Hunk_LowMark ();
+	COM_FileBase (fname, loadname, sizeof (loadname));
+	COM_StripExtension (mod->name, basepath, sizeof (basepath));
+	q_snprintf (md3path, sizeof (md3path), "%s.md3", basepath);
+
+	in_header->numFrames = LittleLong (in_header->numFrames);
+	in_header->numSurfaces = LittleLong (in_header->numSurfaces);
+	in_header->ofsSurfaces = LittleLong (in_header->ofsSurfaces);
+
+	if (in_header->numFrames <= 0 || in_header->numFrames > MAXALIASFRAMES) Sys_Error ("%s has invalid frame count.", fname);
+	if (in_header->numSurfaces <= 0) Sys_Error ("%s has no surfaces.", fname);
+
+	size_t hdrsize = sizeof (aliashdr_t) + (in_header->numFrames - 1) * sizeof (maliasframedesc_t);
+	mainhdr = (aliashdr_t*)Hunk_Alloc (in_header->numSurfaces * hdrsize);
+	memset (mainhdr, 0, in_header->numSurfaces * hdrsize);
+
+	in_surf = (md3Surface_t*)((byte*)in_header + in_header->ofsSurfaces);
+	for (surf_i = 0; surf_i < in_header->numSurfaces; surf_i++)
+	{
+		hdr = (aliashdr_t*)((byte*)mainhdr + surf_i * hdrsize);
+		int numVerts = LittleLong (in_surf->numVerts);
+		int numTris = LittleLong (in_surf->numTriangles);
+
+		aliasmesh_t* out_meshdesc = (aliasmesh_t*)Hunk_Alloc (numVerts * 2 * sizeof (aliasmesh_t));
+		unsigned short* poutindexes = (unsigned short*)Hunk_Alloc (numTris * 3 * sizeof (unsigned short));
+		md3pose_t* raw_poses = (md3pose_t*)Hunk_Alloc (numVerts * in_header->numFrames * sizeof (md3pose_t));
+		stvert_t* raw_stverts = (stvert_t*)Hunk_Alloc (numVerts * sizeof (stvert_t));
+
+		hdr->ident = IDPOLYHEADER;
+		hdr->version = ALIAS_VERSION;
+		hdr->poseverttype = PV_MD3;
+		hdr->numframes = in_header->numFrames;
+		hdr->numskins = 0;
+		hdr->numverts = numVerts;
+		hdr->numtris = numTris;
+		hdr->numposes = in_header->numFrames;
+		VectorSet (hdr->scale_origin, 0, 0, 0);
+		VectorSet (hdr->scale, 1, 1, 1);
+		hdr->meshdesc = (byte*)out_meshdesc - (byte*)hdr;
+		hdr->indexes = (byte*)poutindexes - (byte*)hdr;
+		if (surf_i < in_header->numSurfaces - 1) {
+			hdr->nextsurface = hdrsize;
+		}
+
+		for (skinnum = 0; skinnum < MAX_SKINS; skinnum++) {
+			char skinpath[MAX_QPATH], * skinbuffer, * s;
+			qboolean skin_file_found = false;
+
+			q_snprintf (skinpath, sizeof (skinpath), "%s_%d.skin", md3path, skinnum);
+			skinbuffer = (char*)COM_LoadMallocFile (skinpath, NULL);
+			if (!skinbuffer) {
+				q_snprintf (skinpath, sizeof (skinpath), "%s_%d.skin", basepath, skinnum); // e.g., armor_0.skin
+				skinbuffer = (char*)COM_LoadMallocFile (skinpath, NULL);
+			}
+			if (!skinbuffer) {
+				if (skinnum > 0) break;
+			}
+			else {
+				skin_file_found = true;
+			}
+
+			if (skin_file_found) {
+				s = skinbuffer;
+				char* first_line_end = strchr (s, '\n');
+				if (first_line_end && strchr (s, ',') > first_line_end) { s = first_line_end + 1; }
+
+				while (*s) {
+					char mesh_name[MAX_QPATH], texture_path[MAX_QPATH], original_texture_path[MAX_QPATH];
+					char* comma;
+
+					while (*s && isspace (*s)) s++;
+					if (!*s) break;
+
+					comma = strchr (s, ',');
+					if (!comma) { s = strchr (s, '\n'); if (!s) break; s++; continue; }
+
+					j = comma - s;
+					if (j < MAX_QPATH) {
+						strncpy (mesh_name, s, j);
+						mesh_name[j] = '\0';
+
+						if (strcmp (mesh_name, in_surf->name) == 0) {
+							char* path_start = comma + 1;
+							while (*path_start && isspace (*path_start)) path_start++;
+							j = 0;
+							while (path_start[j] && path_start[j] != '\n' && path_start[j] != '\r') j++;
+
+							if (j < MAX_QPATH) {
+								strncpy (texture_path, path_start, j);
+								texture_path[j] = '\0';
+								q_strlcpy (original_texture_path, texture_path, sizeof (original_texture_path));
+								COM_StripExtension (texture_path, texture_path, sizeof (texture_path));
+
+								int mark = Hunk_LowMark ();
+								unsigned int fwidth, fheight;
+								enum srcformat fmt;
+								void* data = Image_LoadImage (texture_path, (int*)&fwidth, (int*)&fheight, &fmt);
+								if (data) {
+									struct gltexture_s* tex = TexMgr_LoadImage (mod, texture_path, fwidth, fheight, fmt, data, texture_path, 0, TEXPREF_MIPMAP);
+									if (strstr (original_texture_path, "_glow") || strstr (original_texture_path, "_luma")) {
+										hdr->fbtextures[skinnum][0] = tex;
+									}
+									else {
+										hdr->gltextures[skinnum][0] = tex;
+									}
+								}
+								Hunk_FreeToLowMark (mark);
+							}
+						}
+					}
+					s = strchr (s, '\n');
+					if (!s) break;
+					s++;
+				}
+				free (skinbuffer);
+			}
+
+			if (skin_file_found && (hdr->gltextures[skinnum][0] || hdr->fbtextures[skinnum][0])) {
+				if (skinnum + 1 > hdr->numskins) hdr->numskins = skinnum + 1;
+			}
+		}
+
+		if (hdr->numskins == 0) {
+			char fallback_path[MAX_QPATH];
+			unsigned int fwidth, fheight;
+			enum srcformat fmt;
+			void* data;
+			int mark = Hunk_LowMark ();
+
+			q_snprintf (fallback_path, sizeof (fallback_path), "progs/%s", in_surf->name);
+			data = Image_LoadImage (fallback_path, (int*)&fwidth, (int*)&fheight, &fmt);
+			if (!data) {
+				q_snprintf (fallback_path, sizeof (fallback_path), "textures/%s", in_surf->name);
+				data = Image_LoadImage (fallback_path, (int*)&fwidth, (int*)&fheight, &fmt);
+			}
+
+			if (data) {
+				hdr->gltextures[0][0] = TexMgr_LoadImage (mod, fallback_path, fwidth, fheight, fmt, data, fallback_path, 0, TEXPREF_MIPMAP);
+				hdr->numskins = 1;
+			}
+			Hunk_FreeToLowMark (mark);
+		}
+
+		if (hdr->gltextures[0][0]) {
+			hdr->skinwidth = hdr->gltextures[0][0]->width;
+			hdr->skinheight = hdr->gltextures[0][0]->height;
+		}
+		else {
+			hdr->gltextures[0][0] = r_notexture_mip->gltexture;
+			hdr->skinwidth = 64; hdr->skinheight = 64;
+		}
+		if (hdr->numskins == 0) hdr->numskins = 1;
+
+		for (skinnum = 0; skinnum < hdr->numskins; skinnum++) {
+			if (!hdr->gltextures[skinnum][0]) hdr->gltextures[skinnum][0] = hdr->gltextures[0][0];
+			hdr->gltextures[skinnum][1] = hdr->gltextures[skinnum][2] = hdr->gltextures[skinnum][3] = hdr->gltextures[skinnum][0];
+			if (!hdr->fbtextures[skinnum][0]) hdr->fbtextures[skinnum][0] = hdr->fbtextures[0][0];
+			hdr->fbtextures[skinnum][1] = hdr->fbtextures[skinnum][2] = hdr->fbtextures[skinnum][3] = hdr->fbtextures[skinnum][0];
+		}
+
+		md3Triangle_t* in_tris_md3 = (md3Triangle_t*)((byte*)in_surf + LittleLong (in_surf->ofsTriangles));
+		md3TexCoord_t* in_st = (md3TexCoord_t*)((byte*)in_surf + LittleLong (in_surf->ofsSt));
+		md3Vertex_t* in_verts = (md3Vertex_t*)((byte*)in_surf + LittleLong (in_surf->ofsXyzNormal));
+		for (i = 0; i < numVerts; i++) {
+			raw_stverts[i].onseam = 0;
+			raw_stverts[i].s = in_st[i].st[0] * hdr->skinwidth;
+			raw_stverts[i].t = in_st[i].st[1] * hdr->skinheight;
+		}
+		for (f = 0; f < in_header->numFrames; f++) {
+			for (j = 0; j < numVerts; j++) {
+				md3Vertex_t* iv = &in_verts[f * numVerts + j];
+				md3pose_t* ov = &raw_poses[f * numVerts + j];
+				ov->xyz[0] = LittleShort (iv->xyz[0]) * MD3_XYZ_SCALE; ov->xyz[1] = LittleShort (iv->xyz[1]) * MD3_XYZ_SCALE; ov->xyz[2] = LittleShort (iv->xyz[2]) * MD3_XYZ_SCALE;
+				DecodeMD3Normal (iv->normal, ov->normal);
+			}
+		}
+
+		int mark = Hunk_LowMark ();
+		unsigned short* remap = (unsigned short*)Hunk_Alloc (hdr->numverts * 2 * sizeof (remap[0]));
+		hdr->numindexes = 0;
+		hdr->numverts_vbo = 0;
+		for (i = 0; i < hdr->numtris; i++) {
+			for (j = 0; j < 3; j++) {
+				unsigned short vertindex = LittleLong (in_tris_md3[i].indexes[j]);
+				int v = vertindex * 2;
+				if (vertindex >= (unsigned short)numVerts) Sys_Error ("Vertex index out of bounds");
+				if (!remap[v]) {
+					out_meshdesc[hdr->numverts_vbo].vertindex = vertindex;
+					out_meshdesc[hdr->numverts_vbo].st[0] = raw_stverts[vertindex].s;
+					out_meshdesc[hdr->numverts_vbo].st[1] = raw_stverts[vertindex].t;
+					remap[v] = ++hdr->numverts_vbo;
+				}
+				poutindexes[hdr->numindexes++] = remap[v] - 1;
+			}
+		}
+		Hunk_FreeToLowMark (mark);
+
+		md3pose_t* final_poses = (md3pose_t*)Hunk_Alloc (hdr->numverts_vbo * hdr->numposes * sizeof (md3pose_t));
+		hdr->vertexes = (byte*)final_poses - (byte*)hdr;
+		for (f = 0; f < hdr->numposes; f++) {
+			for (i = 0; i < hdr->numverts_vbo; i++) {
+				int original_index = out_meshdesc[i].vertindex;
+				final_poses[f * hdr->numverts_vbo + i] = raw_poses[f * hdr->numverts + original_index];
+			}
+		}
+
+		for (f = 0; f < hdr->numframes; f++) {
+			maliasframedesc_t* frame = &hdr->frames[f];
+			frame->firstpose = f; frame->numposes = 1; frame->interval = 0.1f;
+			q_snprintf (frame->name, sizeof (frame->name), "frame%d", f + 1);
+		}
+
+		in_surf = (md3Surface_t*)((byte*)in_surf + LittleLong (in_surf->ofsEnd));
+	}
+
+	mod->type = mod_alias;
+	mod->synctype = ST_SYNC;
+
+	GLMesh_LoadVertexBuffer (mod, mainhdr);
+	Mod_CalcAliasBounds (mainhdr);
+
+	end = Hunk_LowMark ();
+	total = end - start;
+	Cache_Alloc (&mod->cache, total, loadname);
+	if (!mod->cache.data) return;
+	memcpy (mod->cache.data, mainhdr, total);
 	Hunk_FreeToLowMark (start);
 }
