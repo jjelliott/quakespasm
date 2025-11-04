@@ -43,7 +43,7 @@ static void Mod_Print (void);
 static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_vis = {"external_vis", "1", CVAR_ARCHIVE};
 cvar_t			r_enhancedmodels = {"r_enhancedmodels", "1", CVAR_ARCHIVE};
-cvar_t			r_enhancedmodels_prio = {"r_enhancedmodels_priority", "md5,md3", CVAR_ARCHIVE};
+cvar_t			r_enhancedmodels_prio = {"r_enhancedmodels_priority", "md3,md5", CVAR_ARCHIVE};
 
 static byte	*mod_novis;
 static int	mod_novis_capacity;
