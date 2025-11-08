@@ -343,7 +343,7 @@ void R_FlushAliasInstances (qboolean showtris)
 		state = GLS_CULL_BACK | GLS_ATTRIBS (1);
 
 	opaque_state = (state | GLS_BLEND_OPAQUE) & ~(GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE);
-	transparent_state = (state | GLS_BLEND_ALPHA | GLS_NO_ZWRITE) & ~(GLS_BLEND_OPAQUE | GLS_CULL_BACK);
+	transparent_state = (state | GLS_BLEND_ALPHA) & ~(GLS_BLEND_OPAQUE | GLS_CULL_BACK);
 
 	if (translucent)
 	{
