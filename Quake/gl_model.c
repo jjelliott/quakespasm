@@ -4461,8 +4461,8 @@ static void Mod_LoadMD5MeshModel (qmodel_t *mod, const char *buffer)
 // Helper to decode an MD3 normal (encoded as spherical coordinates) into a vec3_t.
 static void DecodeMD3Normal (unsigned char n[2], vec3_t out)
 {
-	float lat = (n[1] * 2 * M_PI) / 255.0f;
-	float lng = (n[0] * 2 * M_PI) / 255.0f;
+	float lat = (n[0] * 2 * M_PI) / 255.0f;
+	float lng = (n[1] * 2 * M_PI) / 255.0f;
 	out[0] = cosf (lng) * sinf (lat);
 	out[1] = sinf (lng) * sinf (lat);
 	out[2] = cosf (lat);
