@@ -4457,24 +4457,6 @@ static void Mod_LoadMD5MeshModel (qmodel_t *mod, const char *buffer)
 // == MD3 Model Loader Helpers ===========================================
 // =======================================================================
 
-// Helper to find the best pre-calculated normal index from the engine's table.
-static byte BestNormalIndex (vec3_t v)
-{
-	float	maxdot = -999999.0f;
-	int		best = 0;
-	int		i;
-
-	for (i = 0; i < 162; i++)
-	{
-		float dot = DotProduct (v, anorms[i]);
-		if (dot > maxdot)
-		{
-			maxdot = dot;
-			best = i;
-		}
-	}
-	return (byte)best;
-}
 
 // Helper to decode an MD3 normal (encoded as spherical coordinates) into a vec3_t.
 static void DecodeMD3Normal (unsigned char n[2], vec3_t out)
