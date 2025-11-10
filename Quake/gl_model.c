@@ -25,9 +25,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "quakedef.h"
-const float	anorms[NUMVERTEXNORMALS][3] = {
-#include "anorms.h"
-};
 static qmodel_t*	loadmodel;
 static char	loadname[32];	// for hunk tags
 
