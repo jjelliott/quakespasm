@@ -5048,6 +5048,72 @@ static void Mod_LoadMD3Model (qmodel_t* mod, const char* buffer)
 		in_surf = (md3Surface_t*)((byte*)in_surf + LittleLong (in_surf->ofsEnd));
 	}
 
+	// now we shuffle the surfaces around if one has an indexed skin, to make sure it's found during player color assignment
+	if (in_header->numSurfaces > 1)
+	{ 
+		int skin_surf_index = -1;
+		int surf_i;
+
+		for (surf_i = 1; surf_i < in_header->numSurfaces; surf_i++)
+		{
+			aliashdr_t* hdr = (aliashdr_t*)((byte*)mainhdr + surf_i * hdrsize);
+
+			if (hdr->numskins > 0 &&
+				hdr->gltextures[0][0] &&
+				hdr->gltextures[0][0]->source_format == SRC_INDEXED)
+			{
+				skin_surf_index = surf_i;
+				break; 
+			}
+		}
+
+		if (skin_surf_index > 0)
+		{
+			aliashdr_t* hdr0 = mainhdr;
+			aliashdr_t* hdr_skin = (aliashdr_t*)((byte*)mainhdr + skin_surf_index * hdrsize);
+
+			byte* data0_mesh = (byte*)hdr0 + hdr0->meshdesc;
+			byte* data0_idx = (byte*)hdr0 + hdr0->indexes;
+			byte* data0_vtx = (byte*)hdr0 + hdr0->vertexes;
+
+			byte* dataS_mesh = (byte*)hdr_skin + hdr_skin->meshdesc;
+			byte* dataS_idx = (byte*)hdr_skin + hdr_skin->indexes;
+			byte* dataS_vtx = (byte*)hdr_skin + hdr_skin->vertexes;
+
+			int swap_mark = Hunk_LowMark ();
+			char* temp_block = (char*)Hunk_Alloc (hdrsize);
+
+			memcpy (temp_block, hdr_skin, hdrsize);
+			memcpy (hdr_skin, hdr0, hdrsize);
+			memcpy (hdr0, temp_block, hdrsize);
+
+			Hunk_FreeToLowMark (swap_mark);
+
+			hdr0->meshdesc = dataS_mesh - (byte*)hdr0;
+			hdr0->indexes = dataS_idx - (byte*)hdr0;
+			hdr0->vertexes = dataS_vtx - (byte*)hdr0;
+
+			hdr_skin->meshdesc = data0_mesh - (byte*)hdr_skin;
+			hdr_skin->indexes = data0_idx - (byte*)hdr_skin;
+			hdr_skin->vertexes = data0_vtx - (byte*)hdr_skin;
+
+
+			if (in_header->numSurfaces > 1) {
+				hdr0->nextsurface = hdrsize;
+			}
+			else {
+				hdr0->nextsurface = 0;
+			}
+
+			if (skin_surf_index < in_header->numSurfaces - 1) {
+				hdr_skin->nextsurface = hdrsize;
+			}
+			else {
+				hdr_skin->nextsurface = 0;
+			}
+		}
+	}
+
 	Hunk_FreeToLowMark (validation_mark);
 
 	mod->type = mod_alias;
