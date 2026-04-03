@@ -76,6 +76,22 @@ static music_handler_t *music_handlers = NULL;
 
 static snd_stream_t *bgmstream = NULL;
 
+typedef enum
+{
+	BGM_REQUEST_NONE = 0,
+	BGM_REQUEST_FILE,
+	BGM_REQUEST_CDTRACK
+} bgm_request_t;
+
+static bgm_request_t bgm_current_type = BGM_REQUEST_NONE;
+static char bgm_current_file[MAX_QPATH];
+static byte bgm_current_cdtrack;
+static qboolean bgm_current_cdlooping;
+static qboolean bgm_musicdir_callback_active = false;
+
+static void BGM_StopPlayback (void);
+static void BGM_RestartCurrent (void);
+
 static qboolean BGM_IsValidMusicDir (const char *dir)
 {
 	if (!dir || !*dir)
@@ -90,6 +106,16 @@ static qboolean BGM_IsValidMusicDir (const char *dir)
 
 static void BGM_MusicDir_Callback (cvar_t *var)
 {
+	qboolean restart = false;
+
+	if (bgm_musicdir_callback_active)
+		return;
+
+	bgm_musicdir_callback_active = true;
+
+	if (host_initialized)
+		restart = (bgm_current_type != BGM_REQUEST_NONE);
+
 	if (!BGM_IsValidMusicDir(var->string))
 	{
 		if (*var->string)
@@ -97,8 +123,14 @@ static void BGM_MusicDir_Callback (cvar_t *var)
 			Con_Printf("snd_musicdir should be a single directory name, not a path\n");
 			Cvar_SetROM(var->name, "");
 		}
-		return;
+		goto _done;
 	}
+
+_done:
+	if (restart)
+		BGM_RestartCurrent();
+
+	bgm_musicdir_callback_active = false;
 }
 
 static qboolean BGM_BuildMusicDirPath (char *path, size_t pathsize,
@@ -321,7 +353,12 @@ void BGM_Play (const char *filename)
 	const char *ext;
 	music_handler_t *handler;
 
-	BGM_Stop();
+	BGM_StopPlayback();
+	bgm_current_type = BGM_REQUEST_FILE;
+	if (filename)
+		q_strlcpy(bgm_current_file, filename, sizeof(bgm_current_file));
+	else
+		bgm_current_file[0] = '\0';
 
 	if (music_handlers == NULL)
 		return;
@@ -385,7 +422,10 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 	unsigned int path_id, prev_id, type;
 	music_handler_t *handler;
 
-	BGM_Stop();
+	BGM_StopPlayback();
+	bgm_current_type = BGM_REQUEST_CDTRACK;
+	bgm_current_cdtrack = track;
+	bgm_current_cdlooping = looping;
 	if (CDAudio_Play(track, looping) == 0)
 		return;			/* success */
 
@@ -431,7 +471,7 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 	}
 }
 
-void BGM_Stop (void)
+static void BGM_StopPlayback (void)
 {
 	if (bgmstream)
 	{
@@ -440,6 +480,41 @@ void BGM_Stop (void)
 		bgmstream = NULL;
 		s_rawend = 0;
 	}
+}
+
+static void BGM_RestartCurrent (void)
+{
+	char current_file[MAX_QPATH];
+	byte current_cdtrack;
+	qboolean current_cdlooping;
+	bgm_request_t current_type;
+
+	current_type = bgm_current_type;
+	q_strlcpy(current_file, bgm_current_file, sizeof(current_file));
+	current_cdtrack = bgm_current_cdtrack;
+	current_cdlooping = bgm_current_cdlooping;
+
+	switch (current_type)
+	{
+	case BGM_REQUEST_FILE:
+		BGM_Play(current_file);
+		break;
+	case BGM_REQUEST_CDTRACK:
+		BGM_PlayCDtrack(current_cdtrack, current_cdlooping);
+		break;
+	case BGM_REQUEST_NONE:
+	default:
+		break;
+	}
+}
+
+void BGM_Stop (void)
+{
+	bgm_current_type = BGM_REQUEST_NONE;
+	bgm_current_file[0] = '\0';
+	bgm_current_cdtrack = 0;
+	bgm_current_cdlooping = false;
+	BGM_StopPlayback();
 }
 
 void BGM_Pause (void)
