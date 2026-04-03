@@ -69,6 +69,12 @@ snd_stream_t *S_CodecOpenStreamType (const char *filename, unsigned int type,
 							  qboolean loop);
 	/* Decides according to the required type. */
 
+snd_stream_t *S_CodecOpenStreamTypeDirect (const char *path,
+							const char *displayname,
+							unsigned int type, qboolean loop);
+	/* Opens a stream from an explicit OS path while keeping a short
+	 * display name for messages/debugging. */
+
 snd_stream_t *S_CodecOpenStreamAny (const char *filename, qboolean loop);
 	/* Decides according to file extension. if the
 	 * name has no extension, try all available. */
@@ -104,4 +110,3 @@ int S_CodecIsAvailable (unsigned int type);
 	 * or -1 if no such codec is present. */
 
 #endif	/* _SND_CODEC_H_ */
-

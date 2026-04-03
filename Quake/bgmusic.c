@@ -27,9 +27,11 @@
 #include "bgmusic.h"
 
 #define MUSIC_DIRNAME	"music"
+#define MUSICDIR_PATH_ID	(~0u)
 
 qboolean	bgmloop;
 cvar_t		bgm_extmusic = {"bgm_extmusic", "1", CVAR_ARCHIVE};
+cvar_t		snd_musicdir = {"snd_musicdir", "", CVAR_ARCHIVE};
 
 static qboolean	no_extmusic= false;
 static float	old_volume = -1.0f;
@@ -73,6 +75,87 @@ static music_handler_t *music_handlers = NULL;
 #define CDRIPTYPE(x)	(((x) & CDRIP_TYPES) != 0)
 
 static snd_stream_t *bgmstream = NULL;
+
+static qboolean BGM_IsValidMusicDir (const char *dir)
+{
+	if (!dir || !*dir)
+		return false;
+
+	if (!strcmp(dir, ".") || strstr(dir, "..") || strstr(dir, "/") ||
+		strstr(dir, "\\") || strstr(dir, ":"))
+		return false;
+
+	return true;
+}
+
+static void BGM_MusicDir_Callback (cvar_t *var)
+{
+	if (!BGM_IsValidMusicDir(var->string))
+	{
+		if (*var->string)
+		{
+			Con_Printf("snd_musicdir should be a single directory name, not a path\n");
+			Cvar_SetROM(var->name, "");
+		}
+		return;
+	}
+}
+
+static qboolean BGM_BuildMusicDirPath (char *path, size_t pathsize,
+	const char *base, const char *filename)
+{
+	if (!BGM_IsValidMusicDir(snd_musicdir.string))
+		return false;
+
+	q_snprintf(path, pathsize, "%s/%s/%s", base, snd_musicdir.string, filename);
+	return true;
+}
+
+static qboolean BGM_MusicDirFileExists (const char *filename, unsigned int *path_id)
+{
+	char path[MAX_OSPATH];
+
+	if (BGM_BuildMusicDirPath(path, sizeof(path), host_parms->userdir, filename) &&
+		(Sys_FileType(path) & FS_ENT_FILE))
+	{
+		if (path_id)
+			*path_id = MUSICDIR_PATH_ID;
+		return true;
+	}
+
+	if (host_parms->userdir != host_parms->basedir &&
+		BGM_BuildMusicDirPath(path, sizeof(path), com_basedir, filename) &&
+		(Sys_FileType(path) & FS_ENT_FILE))
+	{
+		if (path_id)
+			*path_id = MUSICDIR_PATH_ID;
+		return true;
+	}
+
+	return false;
+}
+
+static snd_stream_t *BGM_OpenStream (const char *filename, unsigned int type)
+{
+	char path[MAX_OSPATH];
+
+	if (BGM_BuildMusicDirPath(path, sizeof(path), host_parms->userdir, filename))
+	{
+		bgmstream = S_CodecOpenStreamTypeDirect(path, filename, type, bgmloop);
+		if (bgmstream)
+			return bgmstream;
+	}
+
+	if (host_parms->userdir != host_parms->basedir &&
+		BGM_BuildMusicDirPath(path, sizeof(path), com_basedir, filename))
+	{
+		bgmstream = S_CodecOpenStreamTypeDirect(path, filename, type, bgmloop);
+		if (bgmstream)
+			return bgmstream;
+	}
+
+	return S_CodecOpenStreamType(filename, type, bgmloop);
+}
 
 static void BGM_Play_f (void)
 {
@@ -136,6 +219,9 @@ qboolean BGM_Init (void)
 	int i;
 
 	Cvar_RegisterVariable(&bgm_extmusic);
+	Cvar_RegisterVariable(&snd_musicdir);
+	Cvar_SetCallback(&snd_musicdir, BGM_MusicDir_Callback);
+	BGM_MusicDir_Callback(&snd_musicdir);
 	Cmd_AddCommand("music", BGM_Play_f);
 	Cmd_AddCommand("music_pause", BGM_Pause_f);
 	Cmd_AddCommand("music_resume", BGM_Resume_f);
@@ -215,7 +301,7 @@ static void BGM_Play_noext (const char *filename, unsigned int allowed_types)
 		/* not supported in quake */
 			break;
 		case BGM_STREAMER:
-			bgmstream = S_CodecOpenStreamType(tmp, handler->type, bgmloop);
+			bgmstream = BGM_OpenStream(tmp, handler->type);
 			if (bgmstream)
 				return;		/* success */
 			break;
@@ -273,7 +359,7 @@ void BGM_Play (const char *filename)
 	/* not supported in quake */
 		break;
 	case BGM_STREAMER:
-		bgmstream = S_CodecOpenStreamType(tmp, handler->type, bgmloop);
+		bgmstream = BGM_OpenStream(tmp, handler->type);
 		if (bgmstream)
 			return;		/* success */
 		break;
@@ -321,7 +407,8 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 	//		goto _next;
 		q_snprintf(tmp, sizeof(tmp), "%s/track%02d.%s",
 				MUSIC_DIRNAME, (int)track, handler->ext);
-		if (! COM_FileExists(tmp, &path_id))
+		if (!BGM_MusicDirFileExists(tmp, &path_id) &&
+			!COM_FileExists(tmp, &path_id))
 			goto _next;
 		if (path_id > prev_id)
 		{
@@ -338,7 +425,7 @@ void BGM_PlayCDtrack (byte track, qboolean looping)
 	{
 		q_snprintf(tmp, sizeof(tmp), "%s/track%02d.%s",
 				MUSIC_DIRNAME, (int)track, ext);
-		bgmstream = S_CodecOpenStreamType(tmp, type, bgmloop);
+		bgmstream = BGM_OpenStream(tmp, type);
 		if (! bgmstream)
 			Con_Printf("Couldn't handle music file %s\n", tmp);
 	}
@@ -475,4 +562,3 @@ void BGM_Update (void)
 	if (bgmstream)
 		BGM_UpdateStream ();
 }
-

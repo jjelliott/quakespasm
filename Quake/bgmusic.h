@@ -27,6 +27,7 @@
 
 extern qboolean	bgmloop;
 extern cvar_t	bgm_extmusic;
+extern cvar_t	snd_musicdir;
 
 qboolean BGM_Init (void);
 void BGM_Shutdown (void);
@@ -40,4 +41,3 @@ void BGM_Resume (void);
 void BGM_PlayCDtrack (byte track, qboolean looping);
 
 #endif	/* _BGMUSIC_H_ */
-

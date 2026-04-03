@@ -41,6 +41,18 @@
 
 static snd_codec_t *codecs;
 
+static long S_CodecDirectFileLength (FILE *file)
+{
+	long pos, end;
+
+	pos = ftell(file);
+	fseek(file, 0, SEEK_END);
+	end = ftell(file);
+	fseek(file, pos, SEEK_SET);
+
+	return end;
+}
+
 /*
 =================
 S_CodecRegister
@@ -150,6 +162,65 @@ snd_stream_t *S_CodecOpenStreamType (const char *filename, unsigned int type, qb
 			stream->status = STREAM_PLAY;
 		else	S_CodecUtilClose(&stream);
 	}
+	return stream;
+}
+
+snd_stream_t *S_CodecOpenStreamTypeDirect (const char *path,
+	const char *displayname, unsigned int type, qboolean loop)
+{
+	snd_codec_t *codec;
+	snd_stream_t *stream;
+	FILE *handle;
+	long length;
+
+	if (type == CODECTYPE_NONE)
+	{
+		Con_Printf("Bad type for %s\n", displayname);
+		return NULL;
+	}
+
+	codec = codecs;
+	while (codec)
+	{
+		if (type == codec->type)
+			break;
+		codec = codec->next;
+	}
+	if (!codec)
+	{
+		Con_Printf("Unknown type for %s\n", displayname);
+		return NULL;
+	}
+
+	handle = fopen(path, "rb");
+	if (!handle)
+	{
+		Con_DPrintf("Couldn't open %s\n", path);
+		return NULL;
+	}
+
+	length = S_CodecDirectFileLength(handle);
+	if (length < 0)
+	{
+		fclose(handle);
+		return NULL;
+	}
+
+	stream = (snd_stream_t *) Z_Malloc(sizeof(snd_stream_t));
+	stream->codec = codec;
+	stream->loop = loop;
+	stream->fh.file = handle;
+	stream->fh.start = ftell(handle);
+	stream->fh.pos = 0;
+	stream->fh.length = length;
+	stream->fh.pak = stream->pak = false;
+	q_strlcpy(stream->name, displayname, MAX_QPATH);
+
+	if (codec->codec_open(stream))
+		stream->status = STREAM_PLAY;
+	else
+		S_CodecUtilClose(&stream);
+
 	return stream;
 }
 
@@ -328,4 +399,3 @@ int S_CodecIsAvailable (unsigned int type)
 	}
 	return -1;
 }
-

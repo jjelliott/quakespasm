@@ -66,6 +66,10 @@ New cvars:
 -------------------------
 - bgm_extmusic (0 or 1): Disable or enable playback of external music
   files instead of cdaudio. default is 1 (enabled).
+- snd_musicdir: Overlay one extra game directory for music files only.
+  Example: setting snd_musicdir to "quake64" makes the engine also look
+  in quake64/music for external music, but configs, saves and other data
+  still use the active game directory.
 
 New command line options:
 -------------------------
@@ -80,6 +84,8 @@ Music file directories:
 -------------------------
 - The music files are always searched under the "music" subdirectory of
   a game.
+- If snd_musicdir is set, that directory's "music" subdirectory is
+  searched first, ahead of the normal game search paths.
 
 Music file search order:
 -------------------------
@@ -90,4 +96,3 @@ chosen, because it is most likely the one from our own game directory
 itself.  This way, if a mod has track02 as a mp3 or wav, which is below
 track02.ogg in the music_handler order, the mp3 or wav will still have
 priority over track02.ogg from the id1 game directory.
-
